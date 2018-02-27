@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+
+command_exists(){
+   command -v "$@" > /dev/null 2>&1
+}
+
+command_benchmark() {
+    if command_exists "$1"
+    then
+        time "$gnu_dd" if=/dev/urandom bs=1M count=500 2> /dev/null | "$@" > /dev/null
+    else
+        printf '[command `%s` not found]\n' "$1"
+        return 1
+    fi
+}
+
+if command_exists dd
+then
+    gnu_dd='dd'
+else
+    printf '%s\n' 'This script requires dd, but it could not be found.' 1>&2
+    exit 1
+fi
+
+#Basic info
+if [ "$(uname)" = "Linux" ]
+then
+    printf 'Processor:    '
+    awk -F: '/model name/ {name=$2} END {print name}' /proc/cpuinfo | sed 's/^[ \t]*//;s/[ \t]*$//'
+    printf 'CPU cores:    '
+    awk -F: '/model name/ {core++} END {print core}' /proc/cpuinfo
+    printf 'Frequency:    '
+    awk -F: ' /cpu MHz/ {freq=$2} END {print freq " MHz"}' /proc/cpuinfo | sed 's/^[ \t]*//;s/[ \t]*$//'
+    printf 'RAM:          '
+    free -h | awk 'NR==2 {print $2}'
+    if [ "$(swapon -s | wc -l)" -lt 2 ]
+    then
+        printf 'Swap:         -\n'
+    else
+        printf 'Swap:         '
+        free -h | awk 'NR==4 {printf $2}'
+        printf '\n'
+    fi
+else
+    # we'll assume FreeBSD, might work on other BSDs too
+    printf 'Processor:    '
+    sysctl -n hw.model
+    printf 'CPU cores:    '
+    sysctl -n hw.ncpu
+    printf 'Frequency:    '
+    grep -Eo -- '[0-9.]+-MHz' /var/run/dmesg.boot | tr -- '-' ' '
+    printf 'RAM:          '
+    sysctl -n hw.physmem | B_to_MiB
+
+    if [ "$(swapinfo | wc -l)" -lt 2 ]
+    then
+        printf 'Swap:         -\n'
+    else
+        printf 'Swap:         '
+        swapinfo -k | awk 'NR>1 && $1!="Total" {total+=$2} END {print total*1024}' | B_to_MiB
+    fi
+fi
+printf 'Kernel:       '
+uname -s -r -m
+
+printf '\n'
+
+# CPU tests
+export TIMEFORMAT='%3R seconds'
+
+printf 'CPU: SHA256-hashing 500 MB\n    '
+command_benchmark sha256sum || command_benchmark sha256 || printf '[no SHA256 command found]\n'
+
+printf 'CPU: bzip2-compressing 500 MB\n    '
+command_benchmark bzip2
+
+printf 'CPU: AES-encrypting 500 MB\n    '
+command_benchmark openssl enc -e -aes-256-cbc -pass pass:12345678
+
